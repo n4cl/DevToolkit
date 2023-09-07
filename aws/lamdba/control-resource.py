@@ -2,9 +2,9 @@
 AWS リソースの操作を行う
 
 実施できる操作は以下の通り
-- EC2, AutoScalingGroupの起動
-- EC2, AutoScalingGroupの停止
-- EC2, AutoScalingGroupのステータス取得
+- EC2, AutoScalingGroup, RDS の起動
+- EC2, AutoScalingGroup, RDS の停止
+- EC2, AutoScalingGroup, RDS のステータス取得
 """
 
 import os
@@ -124,6 +124,29 @@ def get_ec2_status(ec2_client, control_service):
                 result.append(info)
     return result
 
+def get_rds_status(rds_client, control_service):
+    """
+    RDS の起動しているインスタンスのステータスを取得する
+    """
+    result = []
+
+    response = rds_client.describe_db_instances()
+    for instance in response["DBInstances"]:
+        for tag in instance["TagList"]:
+            if tag["Key"] == "Service" and tag["Value"] == control_service.target_service["service"]:
+                if instance["DBInstanceStatus"] == "available":
+                    result.append({"DBInstanceIdentifier": instance["DBInstanceIdentifier"],
+                                   "DBInstanceClass": instance["DBInstanceClass"],
+                                   "DBInstanceStatus": instance["DBInstanceStatus"]})
+
+    response = rds_client.describe_db_clusters()
+    for cluster in response["DBClusters"]:
+        for tag in cluster["TagList"]:
+            if tag["Key"] == "Service" and tag["Value"] == control_service.target_service["service"]:
+                if cluster["Status"] == "available":
+                    result.append({"DBClusterIdentifier": cluster["DBClusterIdentifier"],
+                                   "DBClusterStatus": cluster["Status"]})
+    return result
 
 def update_auto_scaling_group(autoscaling_clinet, control_service):
     response = autoscaling_clinet.describe_auto_scaling_groups()
@@ -148,8 +171,35 @@ def get_aws_service_status(aws_clients, control_service):
             res.append(get_auto_scaling_group_status(_aws_client.service, control_service))
         elif _aws_client.aws_service_name == "ec2":
             res.append(get_ec2_status(_aws_client.service, control_service))
+        elif _aws_client.aws_service_name == "rds":
+            res.append(get_rds_status(_aws_client.service, control_service))
     return res
 
+def update_rds(rds_client, control_service):
+    """
+    RDS のインスタンスの起動、停止を実施する
+    """
+    response = rds_client.describe_db_instances()
+    for instance in response["DBInstances"]:
+        for tag in instance["TagList"]:
+            if tag["Key"] == "Service" and tag["Value"] == control_service.target_service["service"]:
+                if control_service.action == "start":
+                    if instance["DBInstanceStatus"] == "stopped":
+                        rds_client.start_db_instance(DBInstanceIdentifier=instance["DBInstanceIdentifier"])
+                elif control_service.action == "stop":
+                    if instance["DBInstanceStatus"] == "available":
+                        rds_client.stop_db_instance(DBInstanceIdentifier=instance["DBInstanceIdentifier"])
+
+    response = rds_client.describe_db_clusters()
+    for cluster in response["DBClusters"]:
+        for tag in cluster["TagList"]:
+            if tag["Key"] == "Service" and tag["Value"] == control_service.target_service["service"]:
+                if control_service.action == "start":
+                    if cluster["Status"] == "stopped":
+                        rds_client.start_db_cluster(DBClusterIdentifier=cluster["DBClusterIdentifier"])
+                elif control_service.action == "stop":
+                    if cluster["Status"] == "available":
+                        rds_client.stop_db_cluster(DBClusterIdentifier=cluster["DBClusterIdentifier"])
 
 def update_aws_service(aws_clients, control_service):
 
@@ -158,6 +208,8 @@ def update_aws_service(aws_clients, control_service):
             update_auto_scaling_group(_aws_client.service, control_service)
         elif _aws_client.aws_service_name == "ec2":
             update_ec2(_aws_client.service, control_service)
+        elif _aws_client.aws_service_name == "rds":
+            update_rds(_aws_client.service, control_service)
 
 
 def get_auto_scaling_group_status(autoscaling_clinet, control_service):
@@ -222,9 +274,9 @@ def lambda_handler(event, context):
         update_aws_service(aws_clients, control_service)
 
         if _action == "start":
-            msg += "起動リクエストの受付を開始しました"
+            msg += "起動リクエストの受付が完了しました"
         elif _action == "stop":
-            msg += "停止リクエストの受付を開始しました"
+            msg += "停止リクエストの受付が完了しました"
 
         return {
             'statusCode': 200,
@@ -240,7 +292,7 @@ def lambda_handler(event, context):
 if __name__ == "__main__":
     import sys
     _event = {
-             "aws_service": ["ec2"],
+             "aws_service": ["rds"],
              "target_service": {"service": sys.argv[1]},
              "action": "status",
              }
